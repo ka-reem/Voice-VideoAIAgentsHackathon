@@ -1,73 +1,131 @@
+import av
+import time
+
+# Override the AudioResampler initialization to fix the layout issue
+def fixed_audio_resampler(*args, **kwargs):
+    try:
+        if "layout" in kwargs:
+            if isinstance(kwargs["layout"], int):
+                if kwargs["layout"] == 1:
+                    kwargs["layout"] = "mono"
+                elif kwargs["layout"] == 2:
+                    kwargs["layout"] = "stereo"
+            elif not isinstance(kwargs["layout"], (str, av.AudioLayout)):
+                raise ValueError(f"Unsupported layout type: {type(kwargs['layout'])}")
+        return original_audio_resampler(*args, **kwargs)
+    except Exception as e:
+        print(f"Audio resampler error: {e}")
+        raise
+
+# Backup the original AudioResampler constructor and apply patch
+original_audio_resampler = av.AudioResampler
+av.AudioResampler = fixed_audio_resampler
+
 import asyncio
-from simli import SimliClient, SimliConfig
-from aiohttp import web
 import cv2
 import numpy as np
+import sounddevice as sd
+from simli import SimliClient, SimliConfig
 
-# Configuration for SimliClient
-config = SimliConfig(
-    apiKey="zwdbatubh7hm5zgicg1j9",  # Replace with your API key
-    faceId="6ebf0aa7-6fed-443d-a4c6-fd1e3080b215",        # Replace with your face ID
-    maxSessionLength=3600,        # Maximum session length in seconds
-    maxIdleTime=600,              # Maximum idle time in seconds
-)
+async def wait_for_connection(client, timeout=10):
+    print("Waiting for WebRTC connection...")
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if await client.isConnected():
+            print("WebRTC connection established!")
+            return True
+        await asyncio.sleep(0.5)
+    return False
 
-# Global variable to store the latest video frame
-latest_frame = None
-
-async def handle_video_frame(request):
-    """HTTP handler to serve the latest video frame."""
-    global latest_frame
-    if latest_frame is None:
-        print("No video frame available yet")  # Debug log for no frames
-        return web.Response(status=204)  # No content
-
-    # Encode the frame as JPEG and send it as a response
-    success, jpeg_frame = cv2.imencode('.jpg', latest_frame)
-    if not success:
-        print("Failed to encode frame as JPEG")  # Debug log for encoding failure
-        return web.Response(status=500)  # Internal server error
-
-    print("Serving a video frame")  # Debug log for serving a frame
-    return web.Response(body=jpeg_frame.tobytes(), content_type='image/jpeg')
-
-async def process_video(simli_client):
-    """Retrieve video frames from Simli SDK."""
-    global latest_frame
+async def handle_video_stream(client):
+    print("Initializing video stream...")
+    window_name = 'Simli Video Stream'
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    frame_count = 0
+    
     try:
-        async for video_frame in simli_client.getVideoStreamIterator(targetFormat="RGB"):
-            print("Received a video frame")  # Debug log for receiving frames
-
-            # Convert video frame (Simli format) to OpenCV format (numpy array)
+        print("Requesting video stream...")
+        async for video_frame in client.getVideoStreamIterator(targetFormat="RGB"):
             try:
-                frame = np.array(video_frame.to_ndarray())  # Convert PyAV VideoFrame to numpy array
-                latest_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # Convert RGB to BGR for OpenCV
-            except Exception as e:
-                print(f"Error processing video frame: {e}")  # Log any errors during processing
-
+                # Convert frame data to numpy array
+                frame_data = np.frombuffer(video_frame, dtype=np.uint8)
+                if frame_data.size == 0:
+                    print("Empty frame received, continuing...")
+                    continue
+                
+                # Reshape based on expected dimensions
+                frame = frame_data.reshape((480, 640, 3))  # Adjust dimensions if needed
+                
+                print(f"Displaying frame {frame_count}, shape: {frame.shape}")
+                cv2.imshow(window_name, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                
+                frame_count += 1
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+                
+            except Exception as frame_error:
+                print(f"Frame processing error: {frame_error}")
+                continue
+                
     except Exception as e:
-        print(f"Error in process_video: {e}")  # Log any errors during video stream retrieval
+        print(f"Video stream error: {e}")
+        import traceback
+        traceback.print_exc()
+
+async def handle_audio_stream(client):
+    try:
+        # Initialize audio stream
+        stream = sd.OutputStream(
+            samplerate=16000,
+            channels=1,
+            dtype=np.int16
+        )
+        stream.start()
+
+        async for audio_frame in client.getAudioStreamIterator():
+            # Play audio frame
+            stream.write(np.array(audio_frame))
+    except Exception as e:
+        print(f"Audio stream error: {e}")
+    finally:
+        stream.stop()
+        stream.close()
 
 async def main():
-    """Main function to initialize SimliClient and start HTTP server."""
-    async with SimliClient(config) as simli_client:
-        print("SimliClient initialized.")
+    print("Initializing SimliClient...")
+    # Configure SimliClient
+    config = SimliConfig(
+        # apiKey=
+        # faceId=
+        maxSessionLength=3600,        # Maximum session length in seconds
+        maxIdleTime=600,              # Maximum idle time in seconds
+    )
+    client = SimliClient(config)
 
-        # Start HTTP server for serving video frames
-        app = web.Application()
-        app.router.add_get('/video', handle_video_frame)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, 'localhost', 8080)
-        await site.start()
-        print("HTTP server started at http://localhost:8080/video")
-
-        # Process video frames concurrently with HTTP server
-        await process_video(simli_client)
-
-if __name__ == "__main__":
-    print("Starting SimliClient...")
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Stopping Simli Connection")
+        print("Establishing connection...")
+        await client.Initialize()
+        
+        # Wait for WebRTC connection
+        if not await wait_for_connection(client):
+            print("Failed to establish WebRTC connection")
+            return
+
+        print("Starting streams...")
+        await asyncio.gather(
+            handle_video_stream(client),
+            handle_audio_stream(client)
+        )
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("Cleaning up...")
+        cv2.destroyAllWindows()
+        await client.close()
+        print("Done.")
+
+# Run the main function
+if __name__ == "__main__":
+    asyncio.run(main())

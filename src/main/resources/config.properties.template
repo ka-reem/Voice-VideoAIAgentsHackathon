@@ -1,0 +1,3 @@
+# replace with your actual API key from Groq
+groq.api.key=your_api_key_here
+# will probably create a settings button to add key via UI
