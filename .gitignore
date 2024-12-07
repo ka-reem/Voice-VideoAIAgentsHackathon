@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+gradle-app.setting
+!gradle-wrapper.jar
+.gradletasknamecache
+
+# Java
+*.class
+bin/
+out/
+
+# IDE - VS Code
+.vscode/
+
+# Logs
+*.log
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Application specific
+*.save
+
+# Notes
+ideas.txt
+
+# API key
+src/main/resources/config.properties
+
+# Random notes
+*.txt

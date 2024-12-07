@@ -1,0 +1,61 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group 'com.yourgame'
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = '1.8'
+targetCompatibility = '1.8'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // HTTP Client for Groq API calls
+    implementation 'com.squareup.okhttp3:okhttp:4.9.3'
+    // JSON processing 
+    implementation 'com.google.code.gson:gson:2.10.1'
+    // PDFBox for PDF processing
+    implementation 'org.apache.pdfbox:pdfbox:2.0.29'
+}
+
+application {
+    mainClass = 'game.Game'  // Update to point to the main Game class
+}
+
+jar {
+    manifest {
+        attributes(
+            'Main-Class': 'game.Game',
+            'Class-Path': configurations.runtimeClasspath.collect { it.getName() }.join(' ')
+        )
+    }
+    
+    // Include all dependencies in the jar
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    
+    // Include resources
+    from('src/main/resources') {
+        include 'map.png'
+        include 'tank1.png'
+        include 'config.properties'
+    }
+    
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Task to create a release directory with everything needed
+task release(type: Copy) {
+    dependsOn jar
+    from jar.archiveFile
+    from configurations.runtimeClasspath
+    into "$buildDir/release"
+}
+
+
+
